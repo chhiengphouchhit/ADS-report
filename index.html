@@ -9,6 +9,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <!-- SUPABASE CLOUD SDK -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- IN-BROWSER CLIENT-SIDE OCR ENGINE FOR GITHUB PAGES -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
 :root {
   /* AYLA Brand Colors */
@@ -2516,13 +2518,131 @@ function handleFileOcr(e) {
   reader.readAsDataURL(file);
 }
 
-// PROCESS SCREENSHOT WITH BACKEND WINRT OCR + SMART PARSER
+// THUMBNAIL COMPRESSOR FOR CLOUD SPEED
+function compressThumbnail(dataUrl, maxWidth = 800, quality = 0.75) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width;
+      let h = img.height;
+      if (w > maxWidth) {
+        h = Math.round((h * maxWidth) / w);
+        w = maxWidth;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+// CLIENT-SIDE AD TEXT PARSER
+function parseAdTextClientSide(text, dataUrl) {
+  const tbLower = text.toLowerCase();
+  
+  // Brand
+  let brand = 'PSIS';
+  if (tbLower.includes('elif')) brand = 'ELIF';
+  else if (tbLower.includes('ayla') && tbLower.includes('psis')) brand = 'AYLA × PSIS';
+  else if (tbLower.includes('ayla') || tbLower.includes('australia') || tbLower.includes('young leaders')) brand = 'AYLA';
+  else if (tbLower.includes('psis') || tbLower.includes('paris school')) brand = 'PSIS';
+  
+  // Objective
+  let objective = 'Messages';
+  if (/message|messaging|conversation|chat|inbox/.test(tbLower)) objective = 'Messages';
+  else if (/video|view|watch|thruplay/.test(tbLower)) objective = 'Video Views';
+  else if (/engagement|reaction|comment|like/.test(tbLower)) objective = 'Engagement';
+  else if (/lead|form|register/.test(tbLower)) objective = 'Leads';
+  else if (/reach|awareness/.test(tbLower)) objective = 'Reach';
+
+  // Status
+  let status = 'Completed';
+  if (/active|in review|learning/.test(tbLower)) status = 'Active';
+  else if (/paused|inactive|off/.test(tbLower)) status = 'Paused';
+
+  // Spent
+  let spent = 0;
+  const mSpend = text.match(/(?:amount spent|spent|spend)[:\s\$]*([0-9]+(?:,[0-9]+)*(?:\.[0-9]+)?)/i) || text.match(/\$\s*([0-9]+(?:,[0-9]+)*(?:\.[0-9]+)?)/);
+  if (mSpend) spent = parseFloat(mSpend[1].replace(/,/g, '')) || 0;
+
+  // Budget
+  let budget = spent;
+  const mBudget = text.match(/(?:budget|total budget|of)[:\s\$]*([0-9]+(?:,[0-9]+)*(?:\.[0-9]+)?)/i);
+  if (mBudget) budget = parseFloat(mBudget[1].replace(/,/g, '')) || spent;
+  if (budget < spent) budget = spent;
+
+  // Reach
+  let reach = 0;
+  const mReach = text.match(/(?:people reached|accounts reached|reach)[:\s]*([0-9]+(?:,[0-9]+)*)/i) || text.match(/([0-9]+(?:,[0-9]+)*)\s*(?:people reached|reach)/i);
+  if (mReach) reach = parseInt(mReach[1].replace(/,/g, '')) || 0;
+
+  // Impressions
+  let impressions = 0;
+  const mImp = text.match(/(?:impressions)[:\s]*([0-9]+(?:,[0-9]+)*)/i) || text.match(/([0-9]+(?:,[0-9]+)*)\s*(?:impressions)/i);
+  if (mImp) impressions = parseInt(mImp[1].replace(/,/g, '')) || 0;
+  if (impressions === 0 && reach > 0) impressions = Math.round(reach * 1.4);
+
+  // Results
+  let results = 0;
+  const mRes = text.match(/(?:results|actions)[:\s]*([0-9]+(?:,[0-9]+)*)/i) || text.match(/([0-9]+(?:,[0-9]+)*)\s*(?:messaging conversations|results|conversations|link clicks|leads)/i);
+  if (mRes) results = parseInt(mRes[1].replace(/,/g, '')) || 0;
+
+  // CPR
+  let cpr = 0;
+  const mCpr = text.match(/(?:cost per result|per messaging|cpr)[:\s\$]*([0-9.]+)/i);
+  if (mCpr) cpr = parseFloat(mCpr[1]) || 0;
+  else if (results > 0 && spent > 0) cpr = +(spent / results).toFixed(2);
+
+  // Dates
+  let startDate = '';
+  let endDate = '';
+  const dateMatches = text.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:,?\s*(\d{4}))?/gi);
+  if (dateMatches && dateMatches.length >= 1) {
+    const moMap = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    const currYear = new Date().getFullYear();
+    const parseSingle = (dStr) => {
+      const parts = dStr.match(/([a-z]{3})[a-z]*\s+(\d{1,2})(?:,?\s*(\d{4}))?/i);
+      if (!parts) return '';
+      const m = moMap[parts[1].toLowerCase()] || '09';
+      const d = String(parts[2]).padStart(2, '0');
+      const y = parts[3] || currYear;
+      return `${y}-${m}-${d}`;
+    };
+    startDate = parseSingle(dateMatches[0]);
+    endDate = dateMatches.length >= 2 ? parseSingle(dateMatches[1]) : startDate;
+  }
+
+  // Title
+  let title = `${brand} - Boosted Campaign (${objective})`;
+  const lines = text.split('
+').map(l => l.trim()).filter(l => l.length > 8);
+  for (let l of lines) {
+    if (!/ad center|boosted post|review results|overview|details|audience|spent|budget|reach|impressions|results|cost per result/i.test(l)) {
+      title = l;
+      break;
+    }
+  }
+
+  return {
+    title, brand, platform: 'Facebook', objective, budget, spent, reach, impressions, results, cpr, startDate, endDate, status, image: dataUrl
+  };
+}
+
+// PROCESS SCREENSHOT WITH BACKEND WINRT OCR + IN-BROWSER TESSERACT OCR FALLBACK
 async function processScreenshotImage(dataUrl) {
   const scannerModal = document.getElementById('modal-scanner');
   const previewImg = document.getElementById('scanner-preview-img');
   previewImg.src = dataUrl;
   scannerModal.classList.add('active');
 
+  const compressedThumb = await compressThumbnail(dataUrl, 800, 0.75);
+
+  // 1. Try local server API if running
   try {
     const response = await fetch('/api/analyze-boost', {
       method: 'POST',
@@ -2531,20 +2651,34 @@ async function processScreenshotImage(dataUrl) {
     });
 
     const res = await response.json();
-    scannerModal.classList.remove('active');
-
     if (res.success && res.ads && res.ads.length > 0) {
+      scannerModal.classList.remove('active');
       const ad = res.ads[0];
-      populateFormFromAd(ad, dataUrl);
+      ad.image = compressedThumb;
+      populateFormFromAd(ad, compressedThumb);
       showToast('🎉 ទាញយកទិន្នន័យពី Screenshot បានជោគជ័យ!');
-    } else {
-      fallbackPopulate(dataUrl);
+      return;
     }
   } catch (err) {
-    console.error('OCR API error:', err);
-    scannerModal.classList.remove('active');
-    fallbackPopulate(dataUrl);
+    console.log('Local server OCR not running, switching to In-Browser AI OCR...');
   }
+
+  // 2. Try In-Browser Tesseract.js (works 100% on GitHub Pages & Mobile!)
+  if (window.Tesseract) {
+    try {
+      const { data: { text } } = await Tesseract.recognize(dataUrl, 'eng');
+      const parsedAd = parseAdTextClientSide(text, compressedThumb);
+      scannerModal.classList.remove('active');
+      populateFormFromAd(parsedAd, compressedThumb);
+      showToast('✨ ស្កេនទិន្នន័យដោយ In-Browser AI OCR ជោគជ័យ!');
+      return;
+    } catch (ocrErr) {
+      console.warn('In-browser OCR error:', ocrErr);
+    }
+  }
+
+  scannerModal.classList.remove('active');
+  fallbackPopulate(compressedThumb);
 }
 
 function populateFormFromAd(ad, dataUrl) {
