@@ -2453,12 +2453,32 @@ function safeSetStorage(key, val) {
   }
 }
 
+function isDemoOrTest(b) {
+  if (!b) return true;
+  const id = String(b.id || '').toLowerCase();
+  const title = String(b.title || '').toLowerCase();
+  return (
+    id === 'test-date' ||
+    id.includes('test-date') ||
+    id.includes('demo') ||
+    title.includes('test date') ||
+    title.includes('demo') ||
+    title.includes('sample') ||
+    title === 'test'
+  );
+}
+
 function loadFromStorage() {
   const saved = localStorage.getItem('ayla_psis_boosts_data');
   if (saved) {
     try {
-      boosts = JSON.parse(saved);
-      if (!Array.isArray(boosts)) boosts = [];
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        boosts = parsed.filter(b => !isDemoOrTest(b));
+        safeSetStorage('ayla_psis_boosts_data', JSON.stringify(boosts));
+      } else {
+        boosts = [];
+      }
     } catch (e) {
       boosts = [];
     }
@@ -2477,7 +2497,7 @@ async function syncFromCloudAndServer() {
     const res = await fetch('/api/boosts');
     const data = await res.json();
     if (data.success && Array.isArray(data.boosts) && data.boosts.length > 0) {
-      boosts = data.boosts;
+      boosts = data.boosts.filter(b => !isDemoOrTest(b));
       safeSetStorage('ayla_psis_boosts_data', JSON.stringify(boosts));
       updateMemoryIndicator('local');
     }
@@ -2506,8 +2526,10 @@ async function syncFromSupabase() {
     if (Array.isArray(data)) {
       isSupabaseReady = true;
       document.getElementById('supabase-setup-alert').style.display = 'none';
-      if (data.length > 0) {
-        const cloudBoosts = data.map(r => ({
+      
+      const cloudBoosts = data
+        .filter(r => !isDemoOrTest(r))
+        .map(r => ({
           id: r.id,
           person: r.person,
           brand: r.brand,
@@ -2530,19 +2552,14 @@ async function syncFromSupabase() {
           createdAt: r.created_at
         }));
 
-        // Smart merge: Never wipe out locally added boosts!
-        const cloudIds = new Set(cloudBoosts.map(b => b.id));
-        const unsynced = boosts.filter(b => !cloudIds.has(b.id));
-        boosts = [...cloudBoosts, ...unsynced];
+      // Supabase is authoritative
+      if (cloudBoosts.length > 0) {
+        boosts = cloudBoosts;
         safeSetStorage('ayla_psis_boosts_data', JSON.stringify(boosts));
-
-        for (let b of unsynced) {
-          saveEntryToSupabase(b);
-        }
-      } else if (boosts.length > 0) {
-        for (let b of boosts) {
-          await saveEntryToSupabase(b);
-        }
+      } else {
+        // Purge any residual demo items locally
+        boosts = boosts.filter(b => !isDemoOrTest(b));
+        safeSetStorage('ayla_psis_boosts_data', JSON.stringify(boosts));
       }
       updateMemoryIndicator('supabase');
       return true;
@@ -2703,11 +2720,12 @@ async function testAndSyncSupabase() {
   }
 }
 
-function clearAllData() {
+async function clearAllData() {
   if (!confirm('តើអ្នកពិតជាចង់សម្អាត (Clear) ទិន្នន័យទាំងអស់ចេញមែនទេ?')) return;
   boosts = [];
-  saveToStorage();
-  clearSupabaseTable();
+  safeSetStorage('ayla_psis_boosts_data', JSON.stringify([]));
+  saveToServer();
+  await clearSupabaseTable();
   renderAll();
   closeBackupModal();
   showToast('បានសម្អាតទិន្នន័យទាំងអស់រួចរាល់ 100%!');
@@ -4330,11 +4348,12 @@ function duplicateBoost(id) {
   showToast('បានចម្លងយុទ្ធនាការរួចរាល់!');
 }
 
-function deleteBoost(id) {
+async function deleteBoost(id) {
   if (!confirm('តើអ្នកពិតជាចង់លុបយុទ្ធនាការនេះមែនទេ?')) return;
-  boosts = boosts.filter(b => b.id !== id);
-  saveToStorage();
-  deleteFromSupabase(id);
+  boosts = boosts.filter(b => String(b.id) !== String(id));
+  safeSetStorage('ayla_psis_boosts_data', JSON.stringify(boosts));
+  saveToServer();
+  await deleteFromSupabase(id);
   renderAll();
   showToast('បានលុបយុទ្ធនាការរួចរាល់!');
 }
