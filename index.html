@@ -2222,6 +2222,12 @@ async function syncFromSupabase() {
 async function saveEntryToSupabase(entry) {
   if (!supabaseClient) return;
   try {
+    function sanitizeDate(d) {
+      if (!d) return null;
+      d = String(d).trim();
+      const m = d.match(/^\d{4}-\d{2}-\d{2}$/);
+      return m ? d : null;
+    }
     const row = {
       id: String(entry.id),
       person: entry.person,
@@ -2230,14 +2236,14 @@ async function saveEntryToSupabase(entry) {
       platform: entry.platform,
       objective: entry.objective,
       target_audience: entry.targetAudience || null,
-      budget: entry.budget || 0,
-      spent: entry.spent || 0,
-      reach: entry.reach || 0,
-      impressions: entry.impressions || 0,
-      results: entry.results || 0,
-      cpr: entry.cpr || 0,
-      start_date: entry.startDate || null,
-      end_date: entry.endDate || null,
+      budget: parseFloat(entry.budget) || 0,
+      spent: parseFloat(entry.spent) || 0,
+      reach: parseInt(entry.reach) || 0,
+      impressions: parseInt(entry.impressions) || 0,
+      results: parseInt(entry.results) || 0,
+      cpr: parseFloat(entry.cpr) || 0,
+      start_date: sanitizeDate(entry.startDate),
+      end_date: sanitizeDate(entry.endDate),
       status: entry.status || 'Active',
       post_url: entry.postUrl || null,
       image_url: entry.imageUrl || null,
@@ -2247,8 +2253,12 @@ async function saveEntryToSupabase(entry) {
     const { error } = await supabaseClient.from('boosts').upsert(row);
     if (!error) {
       isSupabaseReady = true;
-      document.getElementById('supabase-setup-alert').style.display = 'none';
+      const sbAlert = document.getElementById('supabase-setup-alert');
+      if (sbAlert) sbAlert.style.display = 'none';
       updateMemoryIndicator('supabase');
+      console.log('✅ Auto-saved to Supabase Cloud:', row.id);
+    } else {
+      console.warn('Supabase save error:', error);
     }
   } catch (e) {
     console.warn('Could not save to Supabase:', e);
